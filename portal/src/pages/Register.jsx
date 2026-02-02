@@ -14,12 +14,13 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      await api.post('/auth/register', {
+      const { data } = await api.post('/auth/register', {
         username: values.username,
         password: values.password,
       });
-      message.success('注册成功，请登录');
-      navigate('/login');
+      localStorage.setItem('user_token', data.token);
+      message.success('注册成功');
+      navigate('/', { replace: true });
     } catch (err) {
       message.error(err.response?.data?.error || '注册失败');
     } finally {
