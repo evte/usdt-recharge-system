@@ -1,29 +1,19 @@
 /**
- * Gas/Energy Provisioning Service
+ * TRC20 Energy Provisioning Service (trx-api.com)
  *
- * Calls an external third-party API to provision gas (ETH) or energy (TRX)
- * to a target wallet address before USDT collection.
+ * Delegates energy to a target wallet via trx-api.com before TRC20 USDT collection.
  *
  * .env config:
- *   GAS_PROVIDER_ENABLED=true                   # Enable/disable external gas provider
- *   GAS_PROVIDER_API_URL=https://xxx.com/api     # Base URL
- *   GAS_PROVIDER_API_KEY=your-api-key            # Auth key (sent as header)
- *   GAS_PROVIDER_TIMEOUT=30000                   # Request timeout in ms
+ *   GAS_PROVIDER_ENABLED=true                        # Enable/disable
+ *   GAS_PROVIDER_API_URL=https://api.trx-api.com     # Base URL
+ *   GAS_PROVIDER_API_KEY=your-bearer-token            # Bearer token
+ *   GAS_PROVIDER_TIMEOUT=30000                        # Request timeout in ms
  *
- * Expected external API contract:
- *
- *   POST {GAS_PROVIDER_API_URL}/provision
- *   Headers: { "x-api-key": GAS_PROVIDER_API_KEY, "Content-Type": "application/json" }
- *   Body: {
- *     "chain": "ETH" | "TRON",
- *     "address": "0x... | T...",
- *     "amount_usdt": "100.000000"   // USDT amount to be collected (for fee calculation)
- *   }
- *   Response 200: { "success": true, "txid": "0x...", "message": "..." }
- *   Response 4xx/5xx: { "success": false, "message": "reason" }
- *
- * If GAS_PROVIDER_ENABLED is not "true", falls back to the built-in
- * self-funded gas transfer (original behavior).
+ * API contract (trx-api.com):
+ *   POST {baseUrl}/api/tron/delegate-resource
+ *   Headers: { "Authorization": "Bearer {token}", "Content-Type": "application/json" }
+ *   Body: { "receiver_address": "T...", "amount": 1, "time": 10 }
+ *   Response 200: { "success": true, "txid": "...", "message": "...", "cost": 3 }
  */
 
 const axios = require('axios');
@@ -33,15 +23,13 @@ function isEnabled() {
 }
 
 /**
- * Request gas/energy provisioning from external provider.
+ * Request energy delegation from trx-api.com.
  *
  * @param {object} params
- * @param {'ETH'|'TRON'} params.chain
- * @param {string} params.address   - Target wallet to receive gas/energy
- * @param {string} params.amountUsdt - USDT amount about to be collected
+ * @param {string} params.address - Target TRON wallet to receive energy
  * @returns {Promise<{success: boolean, txid?: string, message?: string}>}
  */
-async function requestGas({ chain, address, amountUsdt }) {
+async function requestGas({ address }) {
   if (!isEnabled()) {
     return { success: false, message: 'Gas provider not enabled, use built-in' };
   }
@@ -51,34 +39,35 @@ async function requestGas({ chain, address, amountUsdt }) {
   const timeout = parseInt(process.env.GAS_PROVIDER_TIMEOUT) || 30000;
 
   try {
-    console.log(`[GasProvider] Requesting ${chain} gas for ${address}, usdt=${amountUsdt}`);
+    console.log(`[GasProvider] Requesting TRC20 energy for ${address}`);
 
     const { data } = await axios.post(
-      `${baseUrl}/provision`,
+      `${baseUrl}/api/tron/delegate-resource`,
       {
-        chain,
-        address,
-        amount_usdt: amountUsdt,
+        receiver_address: address,
+        amount: 1,
+        time: 10,
+        activate_address: 1,
       },
       {
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
+          'Authorization': `Bearer ${apiKey}`,
         },
         timeout,
       }
     );
 
     if (data && data.success) {
-      console.log(`[GasProvider] ${chain} gas provisioned for ${address}, txid: ${data.txid || 'N/A'}`);
+      console.log(`[GasProvider] TRC20 energy delegated to ${address}, txid: ${data.txid || 'N/A'}, cost: ${data.cost || 'N/A'} TRX`);
       return { success: true, txid: data.txid, message: data.message };
     }
 
-    console.warn(`[GasProvider] ${chain} gas provision failed: ${data?.message || 'unknown'}`);
+    console.warn(`[GasProvider] TRC20 energy delegation failed: ${data?.message || 'unknown'}`);
     return { success: false, message: data?.message || 'Provider returned failure' };
   } catch (err) {
     const msg = err.response?.data?.message || err.message;
-    console.error(`[GasProvider] ${chain} request error for ${address}: ${msg}`);
+    console.error(`[GasProvider] TRC20 request error for ${address}: ${msg}`);
     return { success: false, message: msg };
   }
 }
