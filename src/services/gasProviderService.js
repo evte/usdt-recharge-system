@@ -39,16 +39,13 @@ async function requestGas({ address }) {
   const timeout = parseInt(process.env.GAS_PROVIDER_TIMEOUT) || 30000;
 
   try {
-    console.log(`[GasProvider] Requesting TRC20 energy for ${address}`);
+    const url = `${baseUrl}/api/tron/delegate-resource`;
+    const body = { receiver_address: address, amount: 1, time: 10, activate_address: 1 };
+    console.log(`[GasProvider] POST ${url}`, JSON.stringify(body));
 
     const { data } = await axios.post(
-      `${baseUrl}/api/tron/delegate-resource`,
-      {
-        receiver_address: address,
-        amount: 1,
-        time: 10,
-        activate_address: 1,
-      },
+      url,
+      body,
       {
         headers: {
           'Content-Type': 'application/json',
