@@ -106,6 +106,17 @@ async function main() {
     process.exit(0);
   }
 
+  const reserveUsdt = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
+  const reserveRaw = BigInt(Math.round(reserveUsdt * 1e6));
+  const transferRaw = BigInt(balanceRaw.toString()) - reserveRaw;
+
+  if (transferRaw <= 0n) {
+    console.log(`[Manual] Balance ${balance} not enough after reserve ${reserveUsdt}, nothing to collect`);
+    process.exit(0);
+  }
+
+  const transferNum = Number(transferRaw) / 1e6;
+
   // 3. Provision gas
   const gasReady = await provisionGas(wallet, tronWeb);
   if (!gasReady) {
@@ -114,10 +125,10 @@ async function main() {
   }
 
   // 4. Transfer USDT
-  console.log(`[Manual] Transferring ${balance} USDT to ${collectionAddress}...`);
+  console.log(`[Manual] Transferring ${transferNum} USDT to ${collectionAddress} (reserving ${reserveUsdt})...`);
   const tx = await contract.methods.transfer(
     collectionAddress,
-    BigInt(balanceRaw.toString())
+    transferRaw
   ).send({ feeLimit: 50_000_000 });
 
   console.log(`[Manual] Transfer success, txid: ${tx}`);

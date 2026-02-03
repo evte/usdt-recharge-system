@@ -161,12 +161,22 @@ async function processERC20({ wallet }) {
     return;
   }
 
-  const gasReady = await provisionERC20Gas({ wallet, provider, usdtContract, collectionAddress, balance });
+  const reserveUsdt = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
+  const reserveRaw = BigInt(Math.round(reserveUsdt * 1e6));
+  const transferAmount = balance - reserveRaw;
+
+  if (transferAmount <= 0n) {
+    console.log(`[Collector] ERC20 wallet ${wallet.address} balance ${balanceNum} not enough after reserve ${reserveUsdt}, skipping`);
+    return;
+  }
+
+  const transferNum = Number(transferAmount) / 1e6;
+  const gasReady = await provisionERC20Gas({ wallet, provider, usdtContract, collectionAddress, transferAmount });
   if (!gasReady) return;
 
-  const tx = await usdtContract.transfer(collectionAddress, balance);
+  const tx = await usdtContract.transfer(collectionAddress, transferAmount);
   const receipt = await tx.wait();
-  console.log(`[Collector] ERC20 collected ${balanceNum} USDT from ${wallet.address}, txid: ${receipt.hash}`);
+  console.log(`[Collector] ERC20 collected ${transferNum} USDT from ${wallet.address} (reserved ${reserveUsdt}), txid: ${receipt.hash}`);
 
   const t = await sequelize.transaction();
   try {
@@ -197,15 +207,25 @@ async function processTRC20({ wallet }) {
     return;
   }
 
+  const reserveUsdt = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
+  const reserveRaw = BigInt(Math.round(reserveUsdt * 1e6));
+  const transferRaw = BigInt(balanceRaw.toString()) - reserveRaw;
+
+  if (transferRaw <= 0n) {
+    console.log(`[Collector] TRC20 wallet ${wallet.address} balance ${balance} not enough after reserve ${reserveUsdt}, skipping`);
+    return;
+  }
+
+  const transferNum = Number(transferRaw) / 1e6;
   const gasReady = await provisionTRC20Gas({ wallet, tronWeb });
   if (!gasReady) return;
 
   const tx = await contract.methods.transfer(
     collectionAddress,
-    BigInt(balanceRaw.toString())
+    transferRaw
   ).send({ feeLimit: 50_000_000 });
 
-  console.log(`[Collector] TRC20 collected ${balance} USDT from ${wallet.address}, txid: ${tx}`);
+  console.log(`[Collector] TRC20 collected ${transferNum} USDT from ${wallet.address} (reserved ${reserveUsdt}), txid: ${tx}`);
 
   const t = await sequelize.transaction();
   try {
