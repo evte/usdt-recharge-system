@@ -101,8 +101,21 @@ async function provisionERC20Gas({ wallet, provider, usdtContract, collectionAdd
     value: gasCost * 2n,
   });
   await gasTx.wait();
-  console.log(`[Collector] ERC20 gas sent, txid: ${gasTx.hash}`);
-  return true;
+  console.log(`[Collector] ERC20 gas sent, txid: ${gasTx.hash}, waiting for balance sync...`);
+
+  // Wait for RPC node balance sync, then verify
+  for (let i = 0; i < 5; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const newBalance = await provider.getBalance(wallet.address);
+    if (newBalance >= gasCost) {
+      console.log(`[Collector] ERC20 gas confirmed for ${wallet.address}, ETH: ${Number(newBalance) / 1e18}`);
+      return true;
+    }
+    console.log(`[Collector] ERC20 gas not yet reflected for ${wallet.address}, retry ${i + 1}/5`);
+  }
+
+  console.error(`[Collector] ERC20 gas sent but balance not reflected for ${wallet.address}, skipping`);
+  return false;
 }
 
 // ==================== TRC20 Gas Provisioning ====================

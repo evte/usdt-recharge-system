@@ -64,6 +64,24 @@ async function getOrCreateWallets(userId) {
         chain_type: 'TRC20',
       }, { transaction: t });
       user.trc20_wallet_id = trc20Wallet.id;
+
+      // Activate new TRC20 address by sending 1.001 TRX
+      const gasKey = process.env.TRC20_COLLECTION_PRIVATE_KEY;
+      if (gasKey) {
+        try {
+          const gasTronWeb = new TronWeb({
+            fullHost: process.env.TRON_API_URL || 'https://api.trongrid.io',
+            headers: process.env.TRON_API_KEY
+              ? { 'TRON-PRO-API-KEY': process.env.TRON_API_KEY }
+              : {},
+            privateKey: gasKey,
+          });
+          const activateTx = await gasTronWeb.trx.sendTransaction(address, 1_001_000); // 1.001 TRX
+          console.log(`[Wallet] TRC20 activated ${address}, txid: ${activateTx.txid}`);
+        } catch (activateErr) {
+          console.error(`[Wallet] TRC20 activation failed for ${address}: ${activateErr.message}`);
+        }
+      }
     }
 
     await user.save({ transaction: t });
