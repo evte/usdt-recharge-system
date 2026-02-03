@@ -79,7 +79,7 @@ async function refreshAddressCache() {
 async function saveDeposit({ userId, walletId, txid, amount, chainType, fromAddress, blockNumber }) {
   const t = await sequelize.transaction();
   try {
-    const [, created] = await Deposit.findOrCreate({
+    const [deposit, created] = await Deposit.findOrCreate({
       where: { txid },
       defaults: {
         user_id: userId,
@@ -101,6 +101,9 @@ async function saveDeposit({ userId, walletId, txid, amount, chainType, fromAddr
         transaction: t,
       });
       console.log(`[${chainType}] Deposit: ${amount} USDT -> user ${userId}, tx: ${txid.slice(0, 16)}...`);
+    } else if (deposit.status !== 'confirmed') {
+      await deposit.update({ status: 'confirmed' }, { transaction: t });
+      console.log(`[${chainType}] Deposit status fixed -> confirmed, tx: ${txid.slice(0, 16)}...`);
     }
 
     await t.commit();
