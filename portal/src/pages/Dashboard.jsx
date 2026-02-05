@@ -64,7 +64,8 @@ export default function Dashboard() {
   };
 
   const depositColumns = [
-    { title: '金额', dataIndex: 'amount', width: 120, render: (v) => <span style={{ fontWeight: 'bold', color: '#52c41a' }}>{v} USDT</span> },
+    { title: '金额', dataIndex: 'amount', width: 140, render: (v, r) => <span style={{ fontWeight: 'bold', color: '#52c41a' }}>{v} {r.token_type || 'USDT'}</span> },
+    { title: '币种', dataIndex: 'token_type', width: 70, render: (v) => <Tag color={v === 'USDC' ? 'cyan' : 'green'}>{v || 'USDT'}</Tag> },
     { title: '链', dataIndex: 'chain_type', width: 80, render: (v) => <Tag color={v === 'TRC20' ? 'red' : 'blue'}>{v}</Tag> },
     { title: 'TxID', dataIndex: 'txid', ellipsis: true, render: (v) => <Text copyable={{ text: v }}>{v.slice(0, 16)}...</Text> },
     { title: '状态', dataIndex: 'status', width: 80, render: (v) => <Tag color={v === 'collected' ? 'green' : 'orange'}>{v === 'collected' ? '已确认' : '确认中'}</Tag> },
@@ -77,7 +78,7 @@ export default function Dashboard() {
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <Title level={3} style={{ margin: 0 }}>USDT 充值系统</Title>
+        <Title level={3} style={{ margin: 0 }}>USDT/USDC 充值系统</Title>
         <Space>
           <Text type="secondary">{userInfo?.username}</Text>
           <Button icon={<LogoutOutlined />} onClick={handleLogout}>退出</Button>
@@ -113,7 +114,7 @@ export default function Dashboard() {
         {addresses ? (
           <Row gutter={[16, 16]}>
             <Col xs={24} md={12}>
-              <Card size="small" title={<Tag color="red">TRC20 (TRON)</Tag>} type="inner">
+              <Card size="small" title={<><Tag color="red">TRC20 (TRON)</Tag><span style={{ fontSize: 12, color: '#999' }}>支持 USDT / USDC</span></>} type="inner">
                 <div style={{ wordBreak: 'break-all', fontSize: 13, fontFamily: 'monospace', marginBottom: 8 }}>
                   {addresses.trc20}
                 </div>
@@ -127,7 +128,7 @@ export default function Dashboard() {
               </Card>
             </Col>
             <Col xs={24} md={12}>
-              <Card size="small" title={<Tag color="blue">ERC20 (Ethereum)</Tag>} type="inner">
+              <Card size="small" title={<><Tag color="blue">ERC20 (Ethereum)</Tag><span style={{ fontSize: 12, color: '#999' }}>支持 USDT / USDC</span></>} type="inner">
                 <div style={{ wordBreak: 'break-all', fontSize: 13, fontFamily: 'monospace', marginBottom: 8 }}>
                   {addresses.erc20}
                 </div>

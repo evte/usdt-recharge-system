@@ -26,6 +26,11 @@ const Deposit = sequelize.define('Deposit', {
     type: DataTypes.DECIMAL(20, 6),
     allowNull: false,
   },
+  token_type: {
+    type: DataTypes.ENUM('USDT', 'USDC'),
+    allowNull: false,
+    defaultValue: 'USDT',
+  },
   chain_type: {
     type: DataTypes.ENUM('ERC20', 'TRC20'),
     allowNull: false,

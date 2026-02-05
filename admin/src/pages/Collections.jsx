@@ -25,10 +25,16 @@ export default function Collections() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '用户', dataIndex: ['User', 'username'], width: 100 },
     {
-      title: '金额 (USDT)',
+      title: '金额',
       dataIndex: 'amount',
-      width: 130,
-      render: (v) => <span style={{ fontWeight: 'bold' }}>{v}</span>,
+      width: 140,
+      render: (v, r) => <span style={{ fontWeight: 'bold' }}>{v} {r.token_type || 'USDT'}</span>,
+    },
+    {
+      title: '币种',
+      dataIndex: 'token_type',
+      width: 80,
+      render: (v) => <Tag color={v === 'USDC' ? 'cyan' : 'green'}>{v || 'USDT'}</Tag>,
     },
     {
       title: '链',

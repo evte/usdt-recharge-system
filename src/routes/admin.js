@@ -112,6 +112,7 @@ router.get('/deposits', async (req, res) => {
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 20));
 
     const where = {};
+    if (req.query.token_type) where.token_type = req.query.token_type;
     if (req.query.chain_type) where.chain_type = req.query.chain_type;
     if (req.query.status) where.status = req.query.status;
     if (req.query.user_id) where.user_id = req.query.user_id;

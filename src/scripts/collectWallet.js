@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Manual TRC20 USDT collection for a specific wallet address.
+ * Manual TRC20 USDT/USDC collection for a specific wallet address.
  *
  * Usage:
  *   node src/scripts/collectWallet.js <TRC20_WALLET_ADDRESS>
@@ -88,50 +88,65 @@ async function main() {
   }
   console.log(`[Manual] Wallet found: id=${wallet.id}, user_id=${wallet.user_id}`);
 
-  // 2. Check USDT balance
+  // 2. Check token balances and collect
   const collectionAddress = process.env.TRC20_COLLECTION_ADDRESS;
-  const usdtContractAddr = process.env.TRC20_USDT_CONTRACT;
   const minCollect = parseFloat(process.env.MIN_COLLECT_AMOUNT) || 1;
+  const reserveAmount = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
 
   const privateKey = decrypt(wallet.encrypted_private_key);
   const tronWeb = createTronWeb(privateKey);
-  const contract = await tronWeb.contract().at(usdtContractAddr);
-  const balanceRaw = await contract.methods.balanceOf(wallet.address).call();
-  const balance = Number(balanceRaw) / 1e6;
 
-  console.log(`[Manual] USDT balance: ${balance}, min collect: ${minCollect}, collection address: ${collectionAddress}`);
+  const tokens = [];
+  if (process.env.TRC20_USDT_CONTRACT) tokens.push({ address: process.env.TRC20_USDT_CONTRACT, tokenType: 'USDT' });
+  if (process.env.TRC20_USDC_CONTRACT) tokens.push({ address: process.env.TRC20_USDC_CONTRACT, tokenType: 'USDC' });
 
-  if (balance < minCollect) {
-    console.log(`[Manual] Balance ${balance} below minimum ${minCollect}, nothing to collect`);
-    process.exit(0);
+  let gasProvisioned = false;
+  let collected = false;
+
+  for (const { address: tokenAddr, tokenType } of tokens) {
+    const contract = await tronWeb.contract().at(tokenAddr);
+    const balanceRaw = await contract.methods.balanceOf(wallet.address).call();
+    const balance = Number(balanceRaw) / 1e6;
+
+    console.log(`[Manual] ${tokenType} balance: ${balance}, min collect: ${minCollect}, collection address: ${collectionAddress}`);
+
+    if (balance < minCollect) {
+      console.log(`[Manual] ${tokenType} balance ${balance} below minimum ${minCollect}, skipping`);
+      continue;
+    }
+
+    const reserveRaw = BigInt(Math.round(reserveAmount * 1e6));
+    const transferRaw = BigInt(balanceRaw.toString()) - reserveRaw;
+
+    if (transferRaw <= 0n) {
+      console.log(`[Manual] ${tokenType} balance ${balance} not enough after reserve ${reserveAmount}, skipping`);
+      continue;
+    }
+
+    // Provision gas once
+    if (!gasProvisioned) {
+      const gasReady = await provisionGas(wallet, tronWeb);
+      if (!gasReady) {
+        console.error('[Manual] Gas provision failed, aborting');
+        process.exit(1);
+      }
+      gasProvisioned = true;
+    }
+
+    const transferNum = Number(transferRaw) / 1e6;
+    console.log(`[Manual] Transferring ${transferNum} ${tokenType} to ${collectionAddress} (reserving ${reserveAmount})...`);
+    const tx = await contract.methods.transfer(
+      collectionAddress,
+      transferRaw
+    ).send({ feeLimit: 50_000_000 });
+
+    console.log(`[Manual] ${tokenType} transfer success, txid: ${tx}`);
+    collected = true;
   }
 
-  const reserveUsdt = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
-  const reserveRaw = BigInt(Math.round(reserveUsdt * 1e6));
-  const transferRaw = BigInt(balanceRaw.toString()) - reserveRaw;
-
-  if (transferRaw <= 0n) {
-    console.log(`[Manual] Balance ${balance} not enough after reserve ${reserveUsdt}, nothing to collect`);
-    process.exit(0);
+  if (!collected) {
+    console.log('[Manual] No tokens to collect');
   }
-
-  const transferNum = Number(transferRaw) / 1e6;
-
-  // 3. Provision gas
-  const gasReady = await provisionGas(wallet, tronWeb);
-  if (!gasReady) {
-    console.error('[Manual] Gas provision failed, aborting');
-    process.exit(1);
-  }
-
-  // 4. Transfer USDT
-  console.log(`[Manual] Transferring ${transferNum} USDT to ${collectionAddress} (reserving ${reserveUsdt})...`);
-  const tx = await contract.methods.transfer(
-    collectionAddress,
-    transferRaw
-  ).send({ feeLimit: 50_000_000 });
-
-  console.log(`[Manual] Transfer success, txid: ${tx}`);
 
   // 5. Update deposit status
   const t = await sequelize.transaction();

@@ -5,8 +5,23 @@ const sequelize = require('../config/database');
 const { toDecimalString } = require('../utils/crypto');
 
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
-const USDT_DECIMALS = 6;
+const TOKEN_DECIMALS = 6; // Both USDT and USDC use 6 decimals
 const SCAN_INTERVAL = 3000; // 3 seconds
+
+// Token contract configs: [{ address, tokenType }]
+function getERC20Tokens() {
+  const tokens = [];
+  if (process.env.ERC20_USDT_CONTRACT) tokens.push({ address: process.env.ERC20_USDT_CONTRACT, tokenType: 'USDT' });
+  if (process.env.ERC20_USDC_CONTRACT) tokens.push({ address: process.env.ERC20_USDC_CONTRACT, tokenType: 'USDC' });
+  return tokens;
+}
+
+function getTRC20Tokens() {
+  const tokens = [];
+  if (process.env.TRC20_USDT_CONTRACT) tokens.push({ address: process.env.TRC20_USDT_CONTRACT, tokenType: 'USDT' });
+  if (process.env.TRC20_USDC_CONTRACT) tokens.push({ address: process.env.TRC20_USDC_CONTRACT, tokenType: 'USDC' });
+  return tokens;
+}
 
 // ==================== Simple Block Queue ====================
 
@@ -76,7 +91,7 @@ async function refreshAddressCache() {
 
 // ==================== Deposit Helper ====================
 
-async function saveDeposit({ userId, walletId, txid, amount, chainType, fromAddress, blockNumber }) {
+async function saveDeposit({ userId, walletId, txid, amount, chainType, tokenType, fromAddress, blockNumber }) {
   const t = await sequelize.transaction();
   try {
     const [deposit, created] = await Deposit.findOrCreate({
@@ -86,6 +101,7 @@ async function saveDeposit({ userId, walletId, txid, amount, chainType, fromAddr
         wallet_id: walletId,
         txid,
         amount,
+        token_type: tokenType || 'USDT',
         chain_type: chainType,
         from_address: fromAddress,
         block_number: blockNumber,
@@ -100,7 +116,7 @@ async function saveDeposit({ userId, walletId, txid, amount, chainType, fromAddr
         where: { id: userId },
         transaction: t,
       });
-      console.log(`[${chainType}] Deposit: ${amount} USDT -> user ${userId}, tx: ${txid.slice(0, 16)}...`);
+      console.log(`[${chainType}] Deposit: ${amount} ${tokenType} -> user ${userId}, tx: ${txid.slice(0, 16)}...`);
     } else if (deposit.status !== 'confirmed') {
       await deposit.update({ status: 'confirmed' }, { transaction: t });
       console.log(`[${chainType}] Deposit status fixed -> confirmed, tx: ${txid.slice(0, 16)}...`);
@@ -126,36 +142,39 @@ function getEthProvider() {
 
 async function processERC20Block(blockNum) {
   const provider = getEthProvider();
-  const usdtContract = process.env.ERC20_USDT_CONTRACT;
+  const tokens = getERC20Tokens();
 
-  const logs = await provider.getLogs({
-    address: usdtContract,
-    topics: [TRANSFER_TOPIC],
-    fromBlock: blockNum,
-    toBlock: blockNum,
-  });
+  for (const { address: contractAddr, tokenType } of tokens) {
+    const logs = await provider.getLogs({
+      address: contractAddr,
+      topics: [TRANSFER_TOPIC],
+      fromBlock: blockNum,
+      toBlock: blockNum,
+    });
 
-  for (const log of logs) {
-    try {
-      const from = ethers.getAddress('0x' + log.topics[1].slice(26));
-      const to = ethers.getAddress('0x' + log.topics[2].slice(26));
-      const value = BigInt(log.data);
-      const amount = toDecimalString(value, USDT_DECIMALS);
+    for (const log of logs) {
+      try {
+        const from = ethers.getAddress('0x' + log.topics[1].slice(26));
+        const to = ethers.getAddress('0x' + log.topics[2].slice(26));
+        const value = BigInt(log.data);
+        const amount = toDecimalString(value, TOKEN_DECIMALS);
 
-      const match = erc20AddrMap.get(to.toLowerCase());
-      if (!match) continue;
+        const match = erc20AddrMap.get(to.toLowerCase());
+        if (!match) continue;
 
-      await saveDeposit({
-        userId: match.userId,
-        walletId: match.walletId,
-        txid: log.transactionHash,
-        amount,
-        chainType: 'ERC20',
-        fromAddress: from,
-        blockNumber: blockNum,
-      });
-    } catch (decodeErr) {
-      console.error(`[ERC20] Decode error block ${blockNum}:`, decodeErr.message);
+        await saveDeposit({
+          userId: match.userId,
+          walletId: match.walletId,
+          txid: log.transactionHash,
+          amount,
+          chainType: 'ERC20',
+          tokenType,
+          fromAddress: from,
+          blockNumber: blockNum,
+        });
+      } catch (decodeErr) {
+        console.error(`[ERC20] Decode error block ${blockNum}:`, decodeErr.message);
+      }
     }
   }
 
@@ -180,7 +199,12 @@ function getTronWeb() {
 
 async function processTRC20Block(blockNum) {
   const tronWeb = getTronWeb();
-  const usdtContract = process.env.TRC20_USDT_CONTRACT;
+  const tokens = getTRC20Tokens();
+  // Build a map: base58 contract address -> tokenType
+  const tokenMap = new Map();
+  for (const { address, tokenType } of tokens) {
+    tokenMap.set(address, tokenType);
+  }
 
   const block = await tronWeb.trx.getBlock(blockNum);
   if (!block || !block.transactions) {
@@ -201,7 +225,8 @@ async function processTRC20Block(blockNum) {
       contractAddr = tronWeb.address.fromHex(param.contract_address);
     } catch (_) { continue; }
 
-    if (contractAddr !== usdtContract) continue;
+    const tokenType = tokenMap.get(contractAddr);
+    if (!tokenType) continue;
 
     const data = param.data;
     if (!data || data.length < 136) continue;
@@ -219,7 +244,7 @@ async function processTRC20Block(blockNum) {
     if (tx.ret?.[0]?.contractRet !== 'SUCCESS') continue;
 
     const valueBig = BigInt('0x' + data.slice(72, 136));
-    const amount = toDecimalString(valueBig, USDT_DECIMALS);
+    const amount = toDecimalString(valueBig, TOKEN_DECIMALS);
 
     let fromAddr = '';
     try { fromAddr = tronWeb.address.fromHex(param.owner_address); } catch (_) {}
@@ -230,6 +255,7 @@ async function processTRC20Block(blockNum) {
       txid: tx.txID,
       amount,
       chainType: 'TRC20',
+      tokenType,
       fromAddress: fromAddr,
       blockNumber: blockNum,
     });

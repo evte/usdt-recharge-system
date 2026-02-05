@@ -36,10 +36,16 @@ export default function Deposits() {
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '用户', dataIndex: ['User', 'username'], width: 100 },
     {
-      title: '金额 (USDT)',
+      title: '金额',
       dataIndex: 'amount',
-      width: 130,
-      render: (v) => <span style={{ fontWeight: 'bold', color: '#52c41a' }}>{v}</span>,
+      width: 140,
+      render: (v, r) => <span style={{ fontWeight: 'bold', color: '#52c41a' }}>{v} {r.token_type || 'USDT'}</span>,
+    },
+    {
+      title: '币种',
+      dataIndex: 'token_type',
+      width: 80,
+      render: (v) => <Tag color={v === 'USDC' ? 'cyan' : 'green'}>{v || 'USDT'}</Tag>,
     },
     {
       title: '链',
@@ -67,6 +73,16 @@ export default function Deposits() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
+        <Select
+          placeholder="币种"
+          allowClear
+          style={{ width: 120 }}
+          onChange={(v) => handleFilter('token_type', v)}
+          options={[
+            { value: 'USDT', label: 'USDT' },
+            { value: 'USDC', label: 'USDC' },
+          ]}
+        />
         <Select
           placeholder="链类型"
           allowClear

@@ -31,7 +31,7 @@ export default function Dashboard() {
   const depositColumns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
     { title: '用户', dataIndex: ['User', 'username'], width: 100 },
-    { title: '金额', dataIndex: 'amount', width: 120, render: (v) => `${v} USDT` },
+    { title: '金额', dataIndex: 'amount', width: 140, render: (v, r) => `${v} ${r.token_type || 'USDT'}` },
     {
       title: '链',
       dataIndex: 'chain_type',

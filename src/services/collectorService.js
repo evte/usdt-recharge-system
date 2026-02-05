@@ -157,39 +157,56 @@ async function provisionTRC20Gas({ wallet, tronWeb }) {
 
 // ==================== Queue Processors ====================
 
+// Token configs for collection
+function getERC20TokenConfigs() {
+  const tokens = [];
+  if (process.env.ERC20_USDT_CONTRACT) tokens.push({ address: process.env.ERC20_USDT_CONTRACT, tokenType: 'USDT' });
+  if (process.env.ERC20_USDC_CONTRACT) tokens.push({ address: process.env.ERC20_USDC_CONTRACT, tokenType: 'USDC' });
+  return tokens;
+}
+
+function getTRC20TokenConfigs() {
+  const tokens = [];
+  if (process.env.TRC20_USDT_CONTRACT) tokens.push({ address: process.env.TRC20_USDT_CONTRACT, tokenType: 'USDT' });
+  if (process.env.TRC20_USDC_CONTRACT) tokens.push({ address: process.env.TRC20_USDC_CONTRACT, tokenType: 'USDC' });
+  return tokens;
+}
+
 async function processERC20({ wallet }) {
   const provider = getEthProvider();
   const collectionAddress = process.env.ERC20_COLLECTION_ADDRESS;
-  const usdtAddress = process.env.ERC20_USDT_CONTRACT;
   const minCollect = parseFloat(process.env.MIN_COLLECT_AMOUNT) || 1;
-
+  const reserveAmount = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
   const privateKey = decrypt(wallet.encrypted_private_key);
   const userWallet = new ethers.Wallet(privateKey, provider);
-  const usdtContract = new ethers.Contract(usdtAddress, ERC20_ABI, userWallet);
-  const balance = await usdtContract.balanceOf(wallet.address);
-  const balanceNum = Number(balance) / 1e6;
+  const tokens = getERC20TokenConfigs();
 
-  if (balanceNum < minCollect) {
-    console.log(`[Collector] ERC20 wallet ${wallet.address} balance ${balanceNum} below min, skipping`);
-    return;
+  for (const { address: tokenAddr, tokenType } of tokens) {
+    const tokenContract = new ethers.Contract(tokenAddr, ERC20_ABI, userWallet);
+    const balance = await tokenContract.balanceOf(wallet.address);
+    const balanceNum = Number(balance) / 1e6;
+
+    if (balanceNum < minCollect) {
+      console.log(`[Collector] ERC20 wallet ${wallet.address} ${tokenType} balance ${balanceNum} below min, skipping`);
+      continue;
+    }
+
+    const reserveRaw = BigInt(Math.round(reserveAmount * 1e6));
+    const transferAmount = balance - reserveRaw;
+
+    if (transferAmount <= 0n) {
+      console.log(`[Collector] ERC20 wallet ${wallet.address} ${tokenType} balance ${balanceNum} not enough after reserve ${reserveAmount}, skipping`);
+      continue;
+    }
+
+    const transferNum = Number(transferAmount) / 1e6;
+    const gasReady = await provisionERC20Gas({ wallet, provider, usdtContract: tokenContract, collectionAddress, balance: transferAmount });
+    if (!gasReady) continue;
+
+    const tx = await tokenContract.transfer(collectionAddress, transferAmount);
+    const receipt = await tx.wait();
+    console.log(`[Collector] ERC20 collected ${transferNum} ${tokenType} from ${wallet.address} (reserved ${reserveAmount}), txid: ${receipt.hash}`);
   }
-
-  const reserveUsdt = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
-  const reserveRaw = BigInt(Math.round(reserveUsdt * 1e6));
-  const transferAmount = balance - reserveRaw;
-
-  if (transferAmount <= 0n) {
-    console.log(`[Collector] ERC20 wallet ${wallet.address} balance ${balanceNum} not enough after reserve ${reserveUsdt}, skipping`);
-    return;
-  }
-
-  const transferNum = Number(transferAmount) / 1e6;
-  const gasReady = await provisionERC20Gas({ wallet, provider, usdtContract, collectionAddress, transferAmount });
-  if (!gasReady) return;
-
-  const tx = await usdtContract.transfer(collectionAddress, transferAmount);
-  const receipt = await tx.wait();
-  console.log(`[Collector] ERC20 collected ${transferNum} USDT from ${wallet.address} (reserved ${reserveUsdt}), txid: ${receipt.hash}`);
 
   const t = await sequelize.transaction();
   try {
@@ -206,39 +223,49 @@ async function processERC20({ wallet }) {
 
 async function processTRC20({ wallet }) {
   const collectionAddress = process.env.TRC20_COLLECTION_ADDRESS;
-  const usdtContractAddr = process.env.TRC20_USDT_CONTRACT;
   const minCollect = parseFloat(process.env.MIN_COLLECT_AMOUNT) || 1;
+  const reserveAmount = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
 
   const privateKey = decrypt(wallet.encrypted_private_key);
   const tronWeb = createTronWeb(privateKey);
-  const contract = await tronWeb.contract().at(usdtContractAddr);
-  const balanceRaw = await contract.methods.balanceOf(wallet.address).call();
-  const balance = Number(balanceRaw) / 1e6;
+  const tokens = getTRC20TokenConfigs();
 
-  if (balance < minCollect) {
-    console.log(`[Collector] TRC20 wallet ${wallet.address} balance ${balance} below min, skipping`);
-    return;
+  // Provision gas once for the wallet (shared across tokens)
+  let gasProvisioned = false;
+
+  for (const { address: tokenAddr, tokenType } of tokens) {
+    const contract = await tronWeb.contract().at(tokenAddr);
+    const balanceRaw = await contract.methods.balanceOf(wallet.address).call();
+    const balance = Number(balanceRaw) / 1e6;
+
+    if (balance < minCollect) {
+      console.log(`[Collector] TRC20 wallet ${wallet.address} ${tokenType} balance ${balance} below min, skipping`);
+      continue;
+    }
+
+    const reserveRaw = BigInt(Math.round(reserveAmount * 1e6));
+    const transferRaw = BigInt(balanceRaw.toString()) - reserveRaw;
+
+    if (transferRaw <= 0n) {
+      console.log(`[Collector] TRC20 wallet ${wallet.address} ${tokenType} balance ${balance} not enough after reserve ${reserveAmount}, skipping`);
+      continue;
+    }
+
+    // Provision gas only once per wallet
+    if (!gasProvisioned) {
+      const gasReady = await provisionTRC20Gas({ wallet, tronWeb });
+      if (!gasReady) return;
+      gasProvisioned = true;
+    }
+
+    const transferNum = Number(transferRaw) / 1e6;
+    const tx = await contract.methods.transfer(
+      collectionAddress,
+      transferRaw
+    ).send({ feeLimit: 50_000_000 });
+
+    console.log(`[Collector] TRC20 collected ${transferNum} ${tokenType} from ${wallet.address} (reserved ${reserveAmount}), txid: ${tx}`);
   }
-
-  const reserveUsdt = parseFloat(process.env.COLLECT_RESERVE_AMOUNT) || 0.1;
-  const reserveRaw = BigInt(Math.round(reserveUsdt * 1e6));
-  const transferRaw = BigInt(balanceRaw.toString()) - reserveRaw;
-
-  if (transferRaw <= 0n) {
-    console.log(`[Collector] TRC20 wallet ${wallet.address} balance ${balance} not enough after reserve ${reserveUsdt}, skipping`);
-    return;
-  }
-
-  const transferNum = Number(transferRaw) / 1e6;
-  const gasReady = await provisionTRC20Gas({ wallet, tronWeb });
-  if (!gasReady) return;
-
-  const tx = await contract.methods.transfer(
-    collectionAddress,
-    transferRaw
-  ).send({ feeLimit: 50_000_000 });
-
-  console.log(`[Collector] TRC20 collected ${transferNum} USDT from ${wallet.address} (reserved ${reserveUsdt}), txid: ${tx}`);
 
   const t = await sequelize.transaction();
   try {
