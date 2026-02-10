@@ -7,6 +7,9 @@ const { toDecimalString } = require('../utils/crypto');
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 const TOKEN_DECIMALS = 6; // Both USDT and USDC use 6 decimals
 const SCAN_INTERVAL = 3000; // 3 seconds
+const MAX_BLOCKS_PER_TICK = 50; // Max blocks to enqueue per tick, prevent request explosion
+const BLOCK_PROCESS_DELAY = 100; // ms delay between processing blocks
+const MAX_ERROR_BACKOFF = 30000; // Max backoff delay on consecutive errors (30s)
 
 // Token contract configs: [{ address, tokenType }]
 function getERC20Tokens() {
@@ -28,6 +31,7 @@ function getTRC20Tokens() {
 function createBlockQueue(name, processor) {
   const queue = [];
   let processing = false;
+  let consecutiveErrors = 0;
 
   function enqueue(blockNum) {
     queue.push(blockNum);
@@ -49,8 +53,23 @@ function createBlockQueue(name, processor) {
       const blockNum = queue.shift();
       try {
         await processor(blockNum);
+        consecutiveErrors = 0;
+        // Small delay between blocks to avoid hammering the RPC
+        if (queue.length > 0) {
+          await new Promise(r => setTimeout(r, BLOCK_PROCESS_DELAY));
+        }
       } catch (err) {
-        console.error(`[${name}] Queue process error at block ${blockNum}:`, err.message);
+        consecutiveErrors++;
+        const backoff = Math.min(1000 * Math.pow(2, consecutiveErrors - 1), MAX_ERROR_BACKOFF);
+        console.error(`[${name}] Queue process error at block ${blockNum} (errors: ${consecutiveErrors}, backoff: ${backoff}ms):`, err.message);
+        // Put the failed block back at the front of the queue for retry
+        queue.unshift(blockNum);
+        await new Promise(r => setTimeout(r, backoff));
+        // After too many consecutive errors, stop processing and let next tick retry
+        if (consecutiveErrors >= 10) {
+          console.error(`[${name}] Too many consecutive errors (${consecutiveErrors}), pausing queue`);
+          break;
+        }
       }
     }
 
@@ -281,10 +300,15 @@ async function setLastBlock(chainType, blockNumber) {
   );
 }
 
-// Reset to latest block on startup
+// Reset to latest block on startup (only if no existing state or explicitly provided)
 async function initScanState(chainType, latestBlock) {
+  const existing = await ScanState.findOne({ where: { chain_type: chainType } });
+  if (existing && existing.last_block > 0) {
+    console.log(`[${chainType}] Keeping existing scan state at block ${existing.last_block}`);
+    return;
+  }
   await ScanState.upsert({ chain_type: chainType, last_block: latestBlock });
-  console.log(`[${chainType}] Scan state reset to latest block ${latestBlock}`);
+  console.log(`[${chainType}] Scan state initialized to block ${latestBlock}`);
 }
 
 // ==================== Scanner Loops ====================
@@ -312,8 +336,15 @@ async function tickERC20() {
       return;
     }
 
-    console.log(`[ERC20] Enqueuing blocks ${from} -> ${currentBlock} (${currentBlock - from + 1} blocks)`);
-    erc20Queue.enqueueBatch(from, currentBlock);
+    // Cap the batch size to prevent request explosion
+    const to = Math.min(currentBlock, from + MAX_BLOCKS_PER_TICK - 1);
+    const behind = currentBlock - from + 1;
+    if (behind > MAX_BLOCKS_PER_TICK) {
+      console.log(`[ERC20] Behind ${behind} blocks, capping to ${MAX_BLOCKS_PER_TICK} per tick`);
+    }
+
+    console.log(`[ERC20] Enqueuing blocks ${from} -> ${to} (${to - from + 1} blocks)`);
+    erc20Queue.enqueueBatch(from, to);
   } catch (err) {
     console.error('[ERC20] Tick error:', err.message);
   }
@@ -335,8 +366,15 @@ async function tickTRC20() {
       return;
     }
 
-    console.log(`[TRC20] Enqueuing blocks ${from} -> ${currentBlock} (${currentBlock - from + 1} blocks)`);
-    trc20Queue.enqueueBatch(from, currentBlock);
+    // Cap the batch size to prevent request explosion
+    const to = Math.min(currentBlock, from + MAX_BLOCKS_PER_TICK - 1);
+    const behind = currentBlock - from + 1;
+    if (behind > MAX_BLOCKS_PER_TICK) {
+      console.log(`[TRC20] Behind ${behind} blocks, capping to ${MAX_BLOCKS_PER_TICK} per tick`);
+    }
+
+    console.log(`[TRC20] Enqueuing blocks ${from} -> ${to} (${to - from + 1} blocks)`);
+    trc20Queue.enqueueBatch(from, to);
   } catch (err) {
     console.error('[TRC20] Tick error:', err.message);
   }
@@ -352,15 +390,14 @@ async function startScanner() {
   // Refresh address cache every 30s to pick up new wallets
   addressCacheTimer = setInterval(refreshAddressCache, 30000);
 
-  // Reset scan state to latest block on startup
+  // Initialize scan state — keep existing DB state if available, only set latest block for first-time setup
   try {
     const provider = getEthProvider();
     const ethBlock = await provider.getBlockNumber();
     await initScanState('ERC20', ethBlock);
   } catch (err) {
-    console.error('[ERC20] Init error (will retry on tick):', err.message);
-    // Set to 0 so first tick will re-init
-    await initScanState('ERC20', 0);
+    console.error('[ERC20] Init error (will use existing DB state or retry on tick):', err.message);
+    // Do NOT reset to 0 — let tick pick up from existing DB state
   }
 
   try {
@@ -369,8 +406,8 @@ async function startScanner() {
     const trcBlock = blockInfo.block_header.raw_data.number;
     await initScanState('TRC20', trcBlock);
   } catch (err) {
-    console.error('[TRC20] Init error (will retry on tick):', err.message);
-    await initScanState('TRC20', 0);
+    console.error('[TRC20] Init error (will use existing DB state or retry on tick):', err.message);
+    // Do NOT reset to 0 — let tick pick up from existing DB state
   }
 
   // Start tick loops — 3 seconds
