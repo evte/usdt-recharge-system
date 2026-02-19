@@ -128,6 +128,21 @@ async function provisionTRC20Gas({ wallet, tronWeb }) {
 
   // Step 1: Try external energy provider (trx-api.com)
   if (gasProvider.isEnabled()) {
+    // Ensure sub-address has enough TRX for bandwidth fees
+    const MIN_TRX_FOR_BANDWIDTH = 5_000_000; // 5 TRX
+    if (trxBalance < MIN_TRX_FOR_BANDWIDTH) {
+      const collectionKey = process.env.TRC20_COLLECTION_PRIVATE_KEY;
+      if (!collectionKey) {
+        console.error(`[Collector] TRC20 no TRX available for bandwidth top-up to ${wallet.address}, skipping`);
+        return false;
+      }
+      const feeTronWeb = createTronWeb(collectionKey);
+      console.log(`[Collector] TRC20 sending 5 TRX for bandwidth to ${wallet.address}`);
+      const sendTrx = await feeTronWeb.trx.sendTransaction(wallet.address, MIN_TRX_FOR_BANDWIDTH);
+      console.log(`[Collector] TRC20 bandwidth TRX sent, txid: ${sendTrx.txid}`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
     console.log(`[Collector] TRC20 requesting energy from external provider for ${wallet.address}`);
     const result = await gasProvider.requestGas({ address: wallet.address });
 
